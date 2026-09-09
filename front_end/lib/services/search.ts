@@ -1,0 +1,3 @@
+import { apiClient } from "../api-client"; import { searchService as mock } from "../services"; import type { ApiEnvelope, SearchRequest } from "../api-types";
+export interface SearchResult { name: string; excerpt: string; page: string; section: string; score: string; }
+export const searchApi = { search: async (input: SearchRequest | string): Promise<ApiEnvelope<SearchResult[]>> => { const request = typeof input === "string" ? { query: input } : input; return apiClient.isMockMode() ? mock.search(request.query) : apiClient.post<SearchResult[]>("/search", request); } }; export default searchApi;
