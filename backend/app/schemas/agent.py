@@ -42,3 +42,12 @@ class ToolResult(BaseModel):
     output: Any
     metadata: Dict[str, Any] = {}
     error: Optional[str] = None
+
+class AgentResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    description: str
+    status: str
+    model_id: str
+    allowed_tools: List[str]
+    model_config = ConfigDict(from_attributes=True)

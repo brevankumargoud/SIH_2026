@@ -260,41 +260,127 @@ export interface ChatResponse extends ChatMessage {
 // Helpers & Session Management
 // ---------------------------------------------------------------------------
 
+import { authState } from "./api-client";
+
 const wait = (ms = 180) => new Promise((resolve) => setTimeout(resolve, ms));
 const SESSION_KEY = "sovereign-ai-session";
-const DEMO_ACCOUNT = { email: "engineer@sovereign.local", password: "Demo@12345" };
+const DEMO_ACCOUNT = { email: "demo@example.com", password: "password" };
 
 export const authService = {
   async signIn(email: string, password: string): Promise<ApiResponse<User>> {
-    await wait(250);
     if (!email.trim() || !password) throw new Error("Enter your email and password.");
-    if (email.trim().toLowerCase() !== DEMO_ACCOUNT.email || password !== DEMO_ACCOUNT.password) {
-      throw new Error("Unable to authenticate with those credentials.");
+    
+    if (apiClient.isMockMode()) {
+      await wait(250);
+      if (email.trim().toLowerCase() !== DEMO_ACCOUNT.email || password !== DEMO_ACCOUNT.password) {
+        throw new Error("Unable to authenticate with those credentials.");
+      }
+      const user: User = {
+        id: "usr-000",
+        name: "Demo User",
+        email: DEMO_ACCOUNT.email,
+        role: "Demo Engineer",
+        department: "Operations",
+      };
+      if (typeof window !== "undefined") {
+        document.cookie = `${SESSION_KEY}=authenticated; Path=/; Max-Age=28800; SameSite=Lax`;
+      }
+      return { data: user, message: "Authenticated" };
     }
-    const user: User = {
-      id: "usr-001",
-      name: "Alex Morgan",
-      email: DEMO_ACCOUNT.email,
-      role: "Senior Engineer",
-      department: "Operations",
-    };
+
+    // Real Authentication Flow
+    const formData = new URLSearchParams();
+    formData.append("username", email);
+    formData.append("password", password);
+
+    const loginRes = await apiClient.post<any>("/auth/login", formData, {
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }
+    });
+    
+    const { access_token, refresh_token } = loginRes.data;
+    authState.setTokens(access_token, refresh_token);
+    
+    // Remove the old demo cookie if it exists
     if (typeof window !== "undefined") {
-      document.cookie = `${SESSION_KEY}=authenticated; Path=/; Max-Age=28800; SameSite=Lax`;
+      document.cookie = `${SESSION_KEY}=; Path=/; Max-Age=0; SameSite=Lax`;
     }
+
+    // Fetch current user
+    const meRes = await apiClient.get<any>("/auth/me");
+    const me = meRes.data;
+
+    const user: User = {
+      id: me.id,
+      name: me.full_name || me.username,
+      email: me.email,
+      role: me.roles && me.roles.length > 0 ? me.roles[0] : "User",
+      department: "Operations", // Fallback if backend doesn't provide
+    };
+    
     return { data: user, message: "Authenticated" };
   },
 
   isAuthenticated() {
-    return (
-      typeof document !== "undefined" &&
-      document.cookie.split("; ").some((c) => c.trim().startsWith(`${SESSION_KEY}=`))
-    );
+    if (apiClient.isMockMode()) {
+      return (
+        typeof document !== "undefined" &&
+        document.cookie.split("; ").some((c) => c.trim().startsWith(`${SESSION_KEY}=`))
+      );
+    }
+    return !!authState.accessToken || !!authState.getRefreshToken();
   },
 
   async signOut() {
-    await wait(60);
-    if (typeof window !== "undefined") {
-      document.cookie = `${SESSION_KEY}=; Path=/; Max-Age=0; SameSite=Lax`;
+    if (apiClient.isMockMode()) {
+      await wait(60);
+      if (typeof window !== "undefined") {
+        document.cookie = `${SESSION_KEY}=; Path=/; Max-Age=0; SameSite=Lax`;
+      }
+      return;
+    }
+
+    try {
+      const refreshToken = authState.getRefreshToken();
+      if (refreshToken) {
+        await apiClient.post("/auth/logout", { refresh_token: refreshToken });
+      }
+    } catch (e) {
+      // Ignore backend logout errors, always clear frontend session
+    } finally {
+      authState.clear();
+      if (typeof window !== "undefined") {
+        document.cookie = `${SESSION_KEY}=; Path=/; Max-Age=0; SameSite=Lax`;
+      }
+    }
+  },
+
+  async me(): Promise<User | null> {
+    if (apiClient.isMockMode()) {
+      if (this.isAuthenticated()) {
+        return {
+          id: "usr-000",
+          name: "Demo User",
+          email: DEMO_ACCOUNT.email,
+          role: "Demo Engineer",
+          department: "Operations",
+        };
+      }
+      return null;
+    }
+
+    try {
+      const meRes = await apiClient.get<any>("/auth/me");
+      const me = meRes.data;
+      if (!me) return null;
+      return {
+        id: me.id,
+        name: me.full_name || me.username,
+        email: me.email,
+        role: me.roles && me.roles.length > 0 ? me.roles[0] : "User",
+        department: "Operations", // Fallback if backend doesn't provide
+      };
+    } catch (err) {
+      return null;
     }
   },
 
@@ -360,22 +446,35 @@ export const chatService = {
     conversationId?: string,
     modelOverride?: string
   ): Promise<ApiResponse<ChatResponse>> {
-    const convId = conversationId || activeConversationId || undefined;
+    const convId = conversationId || activeConversationId;
 
     try {
+      let activeConv = convId;
+      if (!activeConv) {
+        // Fetch default workspace
+        const wsRes = await apiClient.get<any>("/workspaces/default");
+        const workspaceId = wsRes.data.id;
+        
+        // Create conversation with workspace_id
+        const convRes = await apiClient.post<any>("/conversations", { 
+          title: "New Conversation",
+          workspace_id: workspaceId
+        });
+        activeConv = convRes.data.id;
+      }
+      
       const response = await apiClient.post<any>(
-        "/api/chat",
+        `/conversations/${activeConv}/messages`,
         {
-          message: content,
-          conversation_id: convId,
-          model_override: modelOverride || undefined,
+          content: content,
+          preferred_model: modelOverride || undefined,
         },
         { timeoutMs: 120000 }
       );
 
       const payload = response.data;
-      if (payload && payload.conversation_id) {
-        activeConversationId = payload.conversation_id;
+      if (activeConv) {
+        activeConversationId = activeConv;
       }
 
       const sources = Array.isArray(payload?.sources)
@@ -390,9 +489,9 @@ export const chatService = {
         : [];
 
       const chatResp: ChatResponse = {
-        id: payload?.request_id || crypto.randomUUID(),
+        id: payload?.assistant_message?.id || payload?.request_id || crypto.randomUUID(),
         role: "assistant",
-        content: payload?.message || "No response received from local model.",
+        content: payload?.assistant_message?.content || payload?.message || "No response received from local model.",
         createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         sources: sources.length > 0 ? sources : undefined,
       };
@@ -455,30 +554,31 @@ let localDocsCache: DocumentRecord[] = [
 export const documentService = {
   async list(): Promise<ApiResponse<DocumentRecord[]>> {
     try {
-      const response = await apiClient.get<any>("/api/documents");
-      const docsList = response.data?.documents || [];
+      const kbRes = await apiClient.get<any>("/knowledge-bases/default");
+      const kbId = kbRes.data.id;
+      const response = await apiClient.get<any>(`/knowledge-bases/${kbId}/documents`);
+      const docsList = response.data?.documents || response.data || [];
 
       if (Array.isArray(docsList) && docsList.length > 0) {
         const backendDocs: DocumentRecord[] = docsList.map((d: any) => {
-          const sizeMb = d.file_size_bytes ? (d.file_size_bytes / 1024 / 1024).toFixed(1) : "1.0";
           let status: DocumentRecord["status"] = "Indexed";
-          if (d.status === "FAILED") status = "Failed";
-          else if (d.status === "PROCESSING" || d.status === "UPLOADED") status = "Processing";
+          if (d.processing_status === "FAILED") status = "Failed";
+          else if (d.processing_status === "PENDING" || d.processing_status === "PROCESSING") status = "Processing";
 
-          const ext = d.filename?.split(".").pop()?.toUpperCase() || "DOC";
+          const ext = d.filename?.split(".").pop()?.toUpperCase() || d.file_type?.toUpperCase() || "DOC";
 
           return {
-            id: d.document_id,
+            id: d.id,
             name: d.filename,
             type: ext,
-            size: `${sizeMb} MB`,
-            owner: "Operations Intelligence",
-            department: "Engineering",
+            size: `1.0 MB`, // file size not returned by backend currently
+            owner: "Authenticated User",
+            department: "Operations",
             uploaded: d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent",
-            status,
-            knowledgeBase: "Plant Operations",
-            chunks: d.chunk_count || 0,
-            classification: "Confidential",
+            status: status,
+            knowledgeBase: "Primary KB",
+            chunks: 0,
+            classification: "Internal",
           };
         });
 
@@ -488,34 +588,37 @@ export const documentService = {
         return { data: merged };
       }
       return { data: localDocsCache };
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       return { data: localDocsCache };
     }
   },
 
   async get(id: string): Promise<ApiResponse<DocumentRecord>> {
     try {
-      const response = await apiClient.get<any>(`/api/documents/${id}`);
+      const response = await apiClient.get<any>(`/documents/${id}`);
       const d = response.data;
-      if (d && d.document_id) {
-        const sizeMb = d.file_size_bytes ? (d.file_size_bytes / 1024 / 1024).toFixed(1) : "1.0";
+      if (d && d.id) {
+        let status: DocumentRecord["status"] = "Indexed";
+        if (d.processing_status === "FAILED") status = "Failed";
+        else if (d.processing_status === "PENDING" || d.processing_status === "PROCESSING") status = "Processing";
+        
         return {
           data: {
-            id: d.document_id,
+            id: d.id,
             name: d.filename,
-            type: d.filename?.split(".").pop()?.toUpperCase() || "DOC",
-            size: `${sizeMb} MB`,
-            owner: "Operations Intelligence",
-            department: "Engineering",
+            type: d.filename?.split(".").pop()?.toUpperCase() || d.file_type?.toUpperCase() || "DOC",
+            size: `1.0 MB`,
+            owner: "Authenticated User",
+            department: "Operations",
             uploaded: d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent",
-            status: d.status === "FAILED" ? "Failed" : d.status === "READY" ? "Indexed" : "Processing",
-            knowledgeBase: "Plant Operations",
-            chunks: d.chunk_count || 0,
-            classification: "Confidential",
+            status: status,
+            knowledgeBase: "Primary KB",
+            chunks: 0,
+            classification: "Internal",
           },
         };
       }
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       // fallback to local cache
     }
     const item = localDocsCache.find((doc) => doc.id === id);
@@ -529,21 +632,23 @@ export const documentService = {
         const formData = new FormData();
         formData.append("file", file);
 
-        const response = await apiClient.upload<any>("/api/documents/upload", formData);
+        const kbRes = await apiClient.get<any>("/knowledge-bases/default");
+        const kbId = kbRes.data.id;
+        const response = await apiClient.upload<any>(`/knowledge-bases/${kbId}/documents`, formData);
         const meta = response.data;
         const sizeMb = (file.size / 1024 / 1024).toFixed(1);
 
         const newDoc: DocumentRecord = {
-          id: meta?.document_id || crypto.randomUUID(),
+          id: meta?.id || crypto.randomUUID(),
           name: meta?.filename || file.name,
-          type: file.name.split(".").pop()?.toUpperCase() || "FILE",
+          type: file.name.split(".").pop()?.toUpperCase() || meta?.file_type?.toUpperCase() || "FILE",
           size: `${sizeMb} MB`,
-          owner: "Alex Morgan",
+          owner: "Authenticated User",
           department: "Operations",
           uploaded: "Just now",
-          status: meta?.status?.toLowerCase() === "ready" ? "Indexed" : "Processing",
-          knowledgeBase: "Plant Operations",
-          chunks: meta?.chunk_count || 0,
+          status: meta?.processing_status === "PENDING" || meta?.processing_status === "PROCESSING" ? "Processing" : meta?.processing_status === "FAILED" ? "Failed" : "Indexed",
+          knowledgeBase: "Primary KB",
+          chunks: 0,
           classification: "Internal",
         };
 
@@ -561,7 +666,7 @@ export const documentService = {
       name: file.name,
       type: file.type || "DOC",
       size: typeof file.size === "string" ? file.size : "2.4 MB",
-      owner: "Alex Morgan",
+      owner: "Authenticated User",
       department: "Operations",
       uploaded: "Just now",
       status: "Indexed",
@@ -575,12 +680,14 @@ export const documentService = {
 
   async remove(id: string): Promise<ApiResponse<void>> {
     try {
-      await apiClient.delete(`/api/documents/${id}`);
-    } catch {
-      // Proceed to update local cache regardless
+      await apiClient.delete(`/documents/${id}`);
+      localDocsCache = localDocsCache.filter((doc) => doc.id !== id);
+      return { data: undefined, message: `Document ${id} removed` };
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
+      localDocsCache = localDocsCache.filter((doc) => doc.id !== id);
+      return { data: undefined, message: `Document ${id} removed` };
     }
-    localDocsCache = localDocsCache.filter((doc) => doc.id !== id);
-    return { data: undefined, message: `Document ${id} removed` };
   },
 
   async reprocess(id: string) {
@@ -595,6 +702,28 @@ export const documentService = {
 
 export const knowledgeBaseService = {
   async list(): Promise<ApiResponse<KnowledgeBaseRecord[]>> {
+    try {
+      const kbRes = await apiClient.get<any>("/knowledge-bases/default");
+      const kb = kbRes.data;
+      
+      const record: KnowledgeBaseRecord = {
+        id: kb.id,
+        name: kb.name || "Primary KB",
+        description: kb.description || "Default knowledge base",
+        documents: 0,
+        chunks: 0,
+        owner: "Authenticated User",
+        updatedAt: kb.created_at ? new Date(kb.created_at).toLocaleDateString() : "Just now",
+        status: "Ready",
+        access: "Private",
+        storage: "1.0 GB",
+      };
+      
+      return { data: [record] };
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
+    }
+    
     return {
       data: [
         {
@@ -668,24 +797,31 @@ export const searchService = {
     if (!query.trim()) return { data: [] };
 
     try {
-      const response = await apiClient.post<any>("/api/documents/search", {
+      let kbId = knowledgeBaseId;
+      if (!kbId || kbId === 'default') {
+        const kbRes = await apiClient.get<any>("/knowledge-bases/default");
+        kbId = kbRes.data.id;
+      }
+
+      const response = await apiClient.post<any>(`/knowledge-bases/${kbId}/search`, {
+        knowledge_base_id: kbId,
         query: query.trim(),
         top_k: 5,
       });
 
-      const results = response.data?.results || [];
+      const results = response.data?.results || response.data || [];
       if (Array.isArray(results) && results.length > 0) {
         const mapped = results.map((r: any) => ({
-          name: r.metadata?.filename || r.metadata?.source || `Document ${r.document_id.slice(0, 8)}`,
-          excerpt: r.text || "",
-          page: r.metadata?.page ? `Page ${r.metadata.page}` : "Section 1",
-          section: r.metadata?.section || "Operational Context",
+          name: r.filename || `Document ${r.document_id?.slice(0, 8)}`,
+          excerpt: r.content || "",
+          page: r.page_number ? `Page ${r.page_number}` : "Section 1",
+          section: "Operational Context",
           score: typeof r.score === "number" ? r.score.toFixed(2) : "0.91",
         }));
         return { data: mapped };
       }
-    } catch {
-      // fallback
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
     }
 
     return {
@@ -755,30 +891,25 @@ let localAgentsCache: AgentConfig[] = [
 export const agentService = {
   async list(): Promise<ApiResponse<AgentConfig[]>> {
     try {
-      const response = await apiClient.get<any>("/api/agents");
-      const raw = response.data;
-      const backendAgents = Array.isArray(raw) ? raw : (raw?.agents || []);
+      const response = await apiClient.get<any>("/agents/default");
+      const a = response.data;
 
-      if (Array.isArray(backendAgents) && backendAgents.length > 0) {
-        const mapped: AgentConfig[] = backendAgents.map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          description: a.description,
-          status: a.status === "active" ? "Online" : "Standby",
-          model: a.model_id || "Sovereign-32B",
-          version: a.version || "1.0.0",
-          tools: a.allowed_tools?.map((t: string) => t.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())) || [
-            "Knowledge Base Query",
-          ],
-          permissions: ["Read", "Storage"],
-          lastRun: "Recent",
-          runCount: 1,
-        }));
-        localAgentsCache = mapped;
-        return { data: mapped };
-      }
-    } catch {
-      // fallback
+      const mapped: AgentConfig[] = [{
+        id: a.id,
+        name: a.name || "Operations Agent",
+        description: a.description || "Default operations agent",
+        status: a.status === "active" ? "Online" : "Standby",
+        model: a.model_id || "Sovereign-32B",
+        version: a.version || "1.0.0",
+        tools: (a.allowed_tools || []).map((t: string) => t.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase())),
+        permissions: ["Read", "Storage"],
+        lastRun: "Recent",
+        runCount: 1,
+      }];
+      localAgentsCache = mapped;
+      return { data: mapped };
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
     }
     return { data: localAgentsCache };
   },
@@ -792,7 +923,7 @@ export const agentService = {
   }): Promise<ApiResponse<AgentConfig>> {
     const slug = input.name.toLowerCase().replace(/[^a-z0-9]/g, "-");
     try {
-      await apiClient.post("/api/agents", {
+      await apiClient.post("/agents", {
         id: slug,
         name: input.name,
         description: input.description,
@@ -803,8 +934,8 @@ export const agentService = {
         allowed_tools: input.tools?.map((t) => t.toLowerCase().replace(/\s+/g, "_")) || ["local_rag_search"],
         allowed_services: ["rag", "chat"],
       });
-    } catch {
-      // continue with local registration
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
     }
 
     const agent: AgentConfig = {
@@ -852,24 +983,23 @@ export const agentExecutionService = {
     const agentName = agent?.name || "Operations Agent";
 
     try {
-      const response = await apiClient.post<any>(`/api/agents/${input.agentId}/execute`, {
-        task: input.input,
+      const response = await apiClient.post<any>(`/agents/${input.agentId}/runs`, {
+        input_data: { task: input.input }
       });
 
       const res = response.data;
-      const durationMs = res?.duration_ms || 1200;
-      const durationStr = `${(durationMs / 1000).toFixed(1)}s`;
+      const finalAnswer = res?.output_data?.final_answer || res?.error_message || "Agent execution finished without returning a clear final answer.";
 
       const execution: AgentExecution = {
-        id: res?.execution_id || crypto.randomUUID(),
+        id: res?.id || crypto.randomUUID(),
         agentId: input.agentId,
         agentName,
         status: res?.status === "completed" ? "Complete" : res?.status === "failed" ? "Failed" : "Complete",
-        startTime: "Just now",
-        duration: durationStr,
+        startTime: res?.started_at ? new Date(res.started_at).toLocaleTimeString() : "Just now",
+        duration: "0.0s",
         inputTokens: Math.max(32, input.input.length),
-        outputTokens: res?.output ? Math.ceil(res.output.length / 4) : 256,
-        result: res?.output || "Analysis completed successfully against authorized on-premise knowledge sources.",
+        outputTokens: Math.max(12, finalAnswer.length),
+        result: finalAnswer,
       };
 
       return { data: execution, message: "Execution completed" };
@@ -912,7 +1042,7 @@ export const agentExecutionService = {
         }));
         return { data: mapped };
       }
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       // fallback
     }
     return { data: [] };
@@ -926,7 +1056,7 @@ export const agentExecutionService = {
 export const workflowService = {
   async runOrchestration(input: { agents: string[]; input: string }): Promise<ApiResponse<WorkflowStep[]>> {
     try {
-      const response = await apiClient.post<any>("/api/workflows", {
+      const response = await apiClient.post<any>("/workflows", {
         agent_ids: input.agents,
         task: input.input,
       });
@@ -945,8 +1075,8 @@ export const workflowService = {
         });
         return { data: steps };
       }
-    } catch {
-      // fallback
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
     }
 
     await wait(800);
@@ -984,7 +1114,7 @@ export const agentHealthService = {
     ApiResponse<{ id: string; component: string; status: string; uptime: string; latency: string; details?: string }[]>
   > {
     try {
-      const response = await apiClient.get<any>("/api/system/status");
+      const response = await apiClient.get<any>("/health");
       const status = response.data;
       const isHealthy = status?.status === "healthy";
 
@@ -1034,7 +1164,7 @@ export const agentHealthService = {
           },
         ],
       };
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       return {
         data: [
           { id: "h-1", component: "Agent Runtime", status: "Healthy", uptime: "99.98%", latency: "42ms" },
@@ -1159,7 +1289,7 @@ export const modelService = {
         };
         return { data: [liveModel, ...mockModels.slice(1)] };
       }
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       // fallback
     }
     return { data: mockModels };
@@ -1248,7 +1378,7 @@ export const modelService = {
           },
         };
       }
-    } catch {
+    } catch (err) { if (!apiClient.isMockMode()) throw err;
       // fallback
     }
     return {
@@ -1335,13 +1465,13 @@ const mockAudit: AuditEvent[] = [
 export const auditService = {
   async list(filter?: Partial<AuditFilter>): Promise<ApiResponse<AuditEvent[]>> {
     try {
-      const executionsRes = await apiClient.get<any[]>("/api/agent-executions");
+      const executionsRes = await apiClient.get<any[]>("/agents/runs");
       const list = executionsRes.data || [];
 
       if (Array.isArray(list) && list.length > 0) {
         const liveAuditEvents: AuditEvent[] = list.map((e: any) => ({
           id: `aud-${e.execution_id.slice(0, 8)}`,
-          actor: "Alex Morgan",
+          actor: "Authenticated User",
           action: `Executed Agent: ${e.agent_id}`,
           resource: `Execution ${e.execution_id.slice(0, 8)}`,
           timestamp: e.created_at ? new Date(e.created_at).toLocaleTimeString() : "Just now",
@@ -1354,8 +1484,8 @@ export const auditService = {
           .filter((event) => !filter?.actor || filter.actor === "All" || event.actor === filter.actor);
         return { data: filtered };
       }
-    } catch {
-      // fallback
+    } catch (err) {
+      if (!apiClient.isMockMode()) throw err;
     }
 
     const filtered = mockAudit
@@ -1374,35 +1504,45 @@ export const adminService = {
   async getSystemStatus(): Promise<ApiResponse<{ api: string; model: string; storage: string; isOnline: boolean; provider: string; modelName: string }>> {
     const backendUrl = apiClient.baseUrl();
     try {
-      const response = await apiClient.get<any>("/api/system/status", { timeoutMs: 3000 });
-      const payload = response.data;
-      if (payload) {
+      await apiClient.get<any>("/health", { timeoutMs: 3000 });
+      return {
+        data: {
+          api: "Connected",
+          model: "Connected",
+          storage: "Connected",
+          isOnline: true,
+          provider: "Local vLLM Cluster",
+          modelName: "Sovereign-32B",
+        },
+        message: "ONLINE",
+      };
+    } catch (e: any) {
+      if (e.code !== "NETWORK_ERROR" && e.code !== "TIMEOUT") {
+        // reachable backend returning an error
         return {
           data: {
-            api: payload.components?.api === "healthy" || payload.api === "online" || payload.status === "operational" ? "Connected" : "Degraded",
-            model: payload.components?.model_provider === "healthy" || payload.llm === "online" ? "Connected" : "Standby",
-            storage: payload.components?.storage === "healthy" || payload.database === "online" ? "Connected" : "Standby",
+            api: "Degraded",
+            model: "Standby",
+            storage: "Standby",
             isOnline: true,
-            provider: payload.provider || "Local vLLM Cluster",
-            modelName: payload.model || "Sovereign-32B",
+            provider: "Local vLLM (Degraded)",
+            modelName: "Sovereign-32B (Standby)",
           },
-          message: payload.air_gap ? "AIR-GAPPED PERIMETER SECURED" : "ONLINE",
+          message: "Backend service degraded.",
         };
       }
-    } catch {
-      // Backend unavailable - report true status
+      return {
+        data: {
+          api: "Unavailable",
+          model: "Unavailable",
+          storage: "Unavailable",
+          isOnline: false,
+          provider: "Local vLLM (Offline)",
+          modelName: "Sovereign-32B (Standby)",
+        },
+        message: `Backend service currently unavailable at ${backendUrl}. Ensure local FastAPI server is running.`,
+      };
     }
-    return {
-      data: {
-        api: "Unavailable",
-        model: "Unavailable",
-        storage: "Unavailable",
-        isOnline: false,
-        provider: "Local vLLM (Offline)",
-        modelName: "Sovereign-32B (Standby)",
-      },
-      message: `Backend service currently unavailable at ${backendUrl}. Ensure local FastAPI server is running.`,
-    };
   },
 };
 
@@ -1454,7 +1594,7 @@ export const reportService = {
       type: input.type,
       status: "Ready",
       createdAt: "Just now",
-      owner: "Alex Morgan",
+      owner: "Authenticated User",
       summary: "Locally generated intelligence report grounded in indexed on-premise documents.",
       sources: 6,
       format: input.format,
@@ -1560,7 +1700,7 @@ export const visionService = {
           image: "pump-inspection.jpg",
           analysisType: "Equipment Inspection",
           model: "Engineering Vision Model",
-          user: "Alex Morgan",
+          user: "Authenticated User",
           date: "Today, 09:18",
           status: "Complete",
         },

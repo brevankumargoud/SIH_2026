@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   ShieldCheck,
   Server,
@@ -47,44 +47,25 @@ export function AdminWorkspace({ onNavigate }: { onNavigate?: (page: string) => 
   })
 
   // Users state
-  const [users, setUsers] = useState<AdminUser[]>([
-    {
-      id: 'usr-001',
-      name: 'Jordan Ellis',
-      email: 'j.ellis@sovereign.local',
-      role: 'Operations Lead',
-      clearance: 'Level 4 — Top Secret',
-      status: 'Active',
-      lastActive: 'Just now',
-    },
-    {
-      id: 'usr-002',
-      name: 'Alex Morgan',
-      email: 'a.morgan@sovereign.local',
-      role: 'Safety Analyst',
-      clearance: 'Level 3 — Confidential',
-      status: 'Active',
-      lastActive: '24m ago',
-    },
-    {
-      id: 'usr-003',
-      name: 'Maya Chen',
-      email: 'm.chen@sovereign.local',
-      role: 'Vision Engineer',
-      clearance: 'Level 4 — Top Secret',
-      status: 'Active',
-      lastActive: '1h ago',
-    },
-    {
-      id: 'usr-004',
-      name: 'David Zhao',
-      email: 'd.zhao@sovereign.local',
-      role: 'System Administrator',
-      clearance: 'Level 5 — Perimeter Admin',
-      status: 'Active',
-      lastActive: '3h ago',
-    },
-  ])
+  const [users, setUsers] = useState<AdminUser[]>([])
+  
+  useEffect(() => {
+    import('@/lib/services').then(({ authService }) => {
+      authService.me().then(u => {
+        if (u) {
+          setUsers([{
+            id: u.id,
+            name: u.name,
+            email: u.email,
+            role: u.role || 'User',
+            clearance: 'Standard Clearance',
+            status: 'Active',
+            lastActive: 'Just now',
+          }])
+        }
+      }).catch(() => {})
+    })
+  }, [])
 
   // Policies
   const [policies, setPolicies] = useState({

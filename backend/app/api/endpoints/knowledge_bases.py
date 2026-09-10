@@ -7,9 +7,36 @@ from app.db.database import get_db
 from app.models.knowledge_base import KnowledgeBase
 from app.schemas.rag import KnowledgeBaseCreate, KnowledgeBaseResponse
 from app.models.user import User
+from app.models.workspace import Workspace
 from app.api.deps import get_current_user, require_workspace_access
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
+
+@router.get("/default", response_model=KnowledgeBaseResponse)
+def get_or_create_default_kb(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Find any KB for the user
+    kb = db.execute(select(KnowledgeBase).where(KnowledgeBase.created_by == current_user.id)).scalars().first()
+    if kb:
+        return kb
+
+    # No KB found, check for any workspace
+    ws = db.execute(select(Workspace).where(Workspace.created_by == current_user.id)).scalars().first()
+    if not ws:
+        ws = Workspace(name="Default Workspace", created_by=current_user.id)
+        db.add(ws)
+        db.commit()
+        db.refresh(ws)
+
+    kb = KnowledgeBase(
+        workspace_id=ws.id,
+        name="Prototype KB",
+        description="Default knowledge base for prototype integration",
+        created_by=current_user.id
+    )
+    db.add(kb)
+    db.commit()
+    db.refresh(kb)
+    return kb
 
 @router.post("", response_model=KnowledgeBaseResponse)
 def create_knowledge_base(request: KnowledgeBaseCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

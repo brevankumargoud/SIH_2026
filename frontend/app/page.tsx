@@ -15,7 +15,7 @@ import {
 import {
   adminService, agentService, authService, chatService,
   documentService, knowledgeBaseService, searchService, visionService,
-  apiClient
+  apiClient, User
 } from '@/lib/services'
 import { AgentsWorkspace } from '@/components/agents-workspace'
 import { ModelsWorkspace } from '@/components/models-workspace'
@@ -112,8 +112,8 @@ function SecurityStrip() {
 }
 
 function Login({ onLogin, onForgotPassword }: { onLogin: () => void; onForgotPassword: () => void }) {
-  const [email, setEmail] = useState('engineer@sovereign.local')
-  const [password, setPassword] = useState('Demo@12345')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [show, setShow] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -211,7 +211,7 @@ function Login({ onLogin, onForgotPassword }: { onLogin: () => void; onForgotPas
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="engineer@sovereign.local"
+                placeholder="name@company.com"
                 required
               />
             </label>
@@ -336,7 +336,7 @@ function ForgotPassword({ onBack }: { onBack: () => void }) {
               value={email}
               onChange={e => setEmail(e.target.value)}
               className="h-11 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-white outline-none focus:border-cyan-400 transition"
-              placeholder="engineer@sovereign.local"
+              placeholder="name@company.com"
               required
             />
           </label>
@@ -414,7 +414,7 @@ function Dashboard({ onNavigate }: { onNavigate: (page: PageKey) => void }) {
     {
       label: 'Backend Gateway',
       value: sysStatus.isOnline ? 'Online' : 'Offline',
-      detail: sysStatus.isOnline ? 'Port 8001 connected' : 'Port 8001 unavailable',
+      detail: sysStatus.isOnline ? `${apiClient.baseUrl()} connected` : `${apiClient.baseUrl()} unavailable`,
       icon: Activity,
       isAlert: !sysStatus.isOnline,
     },
@@ -429,9 +429,9 @@ function Dashboard({ onNavigate }: { onNavigate: (page: PageKey) => void }) {
   ]
 
   const health = [
-    ['Local LLM Server (vLLM)', sysStatus.model, 'Port 8000'],
+    ['Local LLM Server (vLLM)', sysStatus.model, 'Connected locally'],
     ['Local Vector DB (ChromaDB)', sysStatus.storage, 'SQLite embedded'],
-    ['FastAPI Orchestration Gateway', sysStatus.api, 'Port 8001'],
+    ['FastAPI Orchestration Gateway', sysStatus.api, apiClient.baseUrl()],
     ['Air-Gap Hardware Perimeter', 'Online', 'Zero external egress'],
   ]
 
@@ -492,9 +492,9 @@ function Dashboard({ onNavigate }: { onNavigate: (page: PageKey) => void }) {
           <div className="flex items-start gap-3">
             <AlertTriangle className="size-5 text-amber-400 shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-sm">Local FastAPI Server Unavailable (http://127.0.0.1:8001)</p>
+              <p className="font-semibold text-sm">Local FastAPI Server Unavailable ({apiClient.baseUrl()})</p>
               <p className="text-xs text-amber-200/80 mt-0.5">
-                The workbench is currently operating in local simulated fallback mode. Launch the FastAPI backend on port 8001 to enable live hardware telemetry.
+                The workbench is currently operating in local simulated fallback mode. Launch the FastAPI backend to enable live hardware telemetry.
               </p>
             </div>
           </div>
@@ -1363,8 +1363,9 @@ function DocumentsWorkspace({ onNavigate }: { onNavigate: (page: PageKey) => voi
     try {
       setTimeout(() => setUploading((prev: any) => prev ? { ...prev, progress: 65, status: 'Generating Embeddings' } : null), 400)
       const r = await documentService.upload(file)
+      const refreshRes = await documentService.list()
+      setDocs(refreshRes.data)
       setUploading({ ...r.data, progress: 100, status: 'Indexed' })
-      setDocs(prev => [r.data, ...prev.filter(d => d.id !== r.data.id)])
       setNotice(`Document "${file.name}" uploaded and indexed into local vector store.`)
       setTimeout(() => {
         setUploading(null)
@@ -1385,8 +1386,8 @@ function DocumentsWorkspace({ onNavigate }: { onNavigate: (page: PageKey) => voi
       setDeleteConfirmId(null)
       if (selected?.id === id) setSelected(null)
       setTimeout(() => setNotice(''), 3000)
-    } catch {
-      setNotice('Failed to delete document.')
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'Failed to delete document.')
       setTimeout(() => setNotice(''), 3000)
     }
   }
@@ -2445,8 +2446,10 @@ function Shell({ onLogout }: { onLogout: () => void }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [isBackendOnline, setIsBackendOnline] = useState(true)
+  const [user, setUser] = useState<User | null>(null)
 
   useEffect(() => {
+    authService.me().then(u => setUser(u)).catch(() => {})
     adminService.getSystemStatus().then(r => {
       setIsBackendOnline(r.data.isOnline)
     }).catch(() => {
@@ -2578,12 +2581,12 @@ function Shell({ onLogout }: { onLogout: () => void }) {
               className="w-full flex items-center gap-3 rounded-lg p-1.5 hover:bg-white/5 transition text-left"
               title="Open profile & clearance menu"
             >
-              <div className="grid size-8 place-items-center rounded-lg bg-cyan-500/15 text-cyan-400 font-mono text-xs font-bold border border-cyan-500/30">
-                JE
+              <div className="grid size-8 place-items-center rounded-lg bg-cyan-500/15 text-cyan-400 font-mono text-xs font-bold border border-cyan-500/30 uppercase">
+                {user?.name?.substring(0, 2) || 'U'}
               </div>
               <div className={collapsed ? 'lg:hidden' : ''}>
-                <p className="text-xs font-semibold text-foreground">Jordan Ellis</p>
-                <p className="font-mono text-[9px] uppercase tracking-wider text-cyan-400">Level 4 Clearance</p>
+                <p className="text-xs font-semibold text-foreground truncate max-w-[140px]">{user?.name || 'User'}</p>
+                <p className="font-mono text-[9px] uppercase tracking-wider text-cyan-400 truncate max-w-[140px]">{user?.role || 'Access Level: User'}</p>
               </div>
             </button>
           </div>
@@ -2620,10 +2623,10 @@ function Shell({ onLogout }: { onLogout: () => void }) {
               <button
                 onClick={() => setPage('Overview')}
                 className="focus-ring"
-                title={isBackendOnline ? 'Backend online at http://127.0.0.1:8001' : 'Backend offline at http://127.0.0.1:8001'}
+                title={isBackendOnline ? `Backend online at ${apiClient.baseUrl()}` : `Backend offline at ${apiClient.baseUrl()}`}
               >
                 <StatusDot
-                  label={isBackendOnline ? 'Backend Online' : 'Backend Standby'}
+                  label={isBackendOnline ? 'Backend Online' : (apiClient.isMockMode() ? 'Backend Standby' : 'Backend Offline')}
                   isOnline={isBackendOnline}
                 />
               </button>
@@ -2681,6 +2684,7 @@ function Shell({ onLogout }: { onLogout: () => void }) {
         isOpen={profileOpen}
         onClose={() => setProfileOpen(false)}
         onNavigateSettings={() => setPage('Settings')}
+        user={user}
         onLogout={async () => {
           await authService.signOut()
           onLogout()

@@ -1,15 +1,17 @@
 'use client'
 
-import { ShieldCheck, Lock, User, LogOut, Settings, X, Key, Award } from 'lucide-react'
+import { ShieldCheck, Lock, User as UserIcon, LogOut, Settings, X, Key, Award } from 'lucide-react'
+import { User } from '@/lib/services'
 
 interface ProfileModalProps {
   isOpen: boolean
   onClose: () => void
   onNavigateSettings: () => void
   onLogout: () => void
+  user?: User | null
 }
 
-export function ProfileModal({ isOpen, onClose, onNavigateSettings, onLogout }: ProfileModalProps) {
+export function ProfileModal({ isOpen, onClose, onNavigateSettings, onLogout, user }: ProfileModalProps) {
   if (!isOpen) return null
 
   return (
@@ -18,13 +20,13 @@ export function ProfileModal({ isOpen, onClose, onNavigateSettings, onLogout }: 
         {/* Header */}
         <div className="flex items-start justify-between border-b border-white/10 pb-4">
           <div className="flex items-center gap-3">
-            <div className="grid size-12 place-items-center rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-lg font-bold font-mono">
-              JE
+            <div className="grid size-12 place-items-center rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 text-lg font-bold font-mono uppercase">
+              {user?.name?.substring(0, 2) || 'U'}
             </div>
             <div>
-              <h2 className="text-base font-semibold">Jordan Ellis</h2>
-              <p className="font-mono text-xs text-cyan-400">Operations Intelligence Lead</p>
-              <p className="text-[11px] text-muted-foreground">jordan.ellis@sovereign.local</p>
+              <h2 className="text-base font-semibold">{user?.name || 'Unknown User'}</h2>
+              <p className="font-mono text-xs text-cyan-400">{user?.role || 'Access Level: User'}</p>
+              <p className="text-[11px] text-muted-foreground">{user?.email || 'No email provided'}</p>
             </div>
           </div>
           <button onClick={onClose} aria-label="Close profile" className="rounded p-1 text-muted-foreground hover:bg-muted">

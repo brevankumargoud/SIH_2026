@@ -57,6 +57,56 @@ const errorMessages: Record<SupportedErrorCode, string> = {
   TIMEOUT: "The backend request timed out.",
 };
 
+// ---------------------------------------------------------------------------
+// Authentication State Management
+// ---------------------------------------------------------------------------
+
+export const authState = {
+  accessToken: null as string | null,
+  
+  setTokens(access: string | null, refresh: string | null) {
+    this.accessToken = access;
+    if (typeof sessionStorage !== "undefined") {
+      if (refresh) {
+        sessionStorage.setItem("sovereign_refresh_token", refresh);
+      } else {
+        sessionStorage.removeItem("sovereign_refresh_token");
+      }
+    }
+  },
+  
+  getRefreshToken(): string | null {
+    if (typeof sessionStorage !== "undefined") {
+      return sessionStorage.getItem("sovereign_refresh_token");
+    }
+    return null;
+  },
+  
+  clear() {
+    this.accessToken = null;
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem("sovereign_refresh_token");
+    }
+  }
+};
+
+let isRefreshing = false;
+let refreshSubscribers: ((success: boolean) => void)[] = [];
+
+function subscribeToRefresh(cb: (success: boolean) => void) {
+  refreshSubscribers.push(cb);
+}
+
+function onRefreshed(success: boolean) {
+  const cbs = refreshSubscribers;
+  refreshSubscribers = [];
+  cbs.forEach(cb => cb(success));
+}
+
+// ---------------------------------------------------------------------------
+// Request implementation
+// ---------------------------------------------------------------------------
+
 async function request<T>(
   method: string,
   path: string,
@@ -75,6 +125,8 @@ async function request<T>(
   const requestId = makeRequestId();
 
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  const isUrlEncoded = typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams;
+  
   const url = path.startsWith("http://") || path.startsWith("https://")
     ? path
     : buildUrl(config.baseUrl, path);
@@ -85,18 +137,91 @@ async function request<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
 
-  if (!isFormData) {
+  if (!isFormData && !isUrlEncoded && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
 
-  try {
-    const response = await fetch(url, {
+  const doFetch = async () => {
+    const fetchHeaders = { ...headers };
+    if (authState.accessToken) {
+      fetchHeaders["Authorization"] = `Bearer ${authState.accessToken}`;
+    }
+    
+    return fetch(url, {
       ...options,
       method,
-      headers,
-      body: isFormData ? (body as FormData) : body === undefined ? undefined : JSON.stringify(body),
+      headers: fetchHeaders,
+      body: (isFormData || isUrlEncoded) ? (body as any) : (body === undefined ? undefined : JSON.stringify(body)),
       signal: options.signal ?? controller.signal,
     });
+  };
+
+  try {
+    let response = await doFetch();
+
+    // Intercept 401 for token refresh
+    if (
+      response.status === 401 &&
+      !path.includes("/auth/login") &&
+      !path.includes("/auth/refresh")
+    ) {
+      const refreshToken = authState.getRefreshToken();
+      if (refreshToken) {
+        if (!isRefreshing) {
+          isRefreshing = true;
+          try {
+            const refreshUrl = buildUrl(config.baseUrl, "/auth/refresh");
+            const refreshRes = await fetch(refreshUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ refresh_token: refreshToken })
+            });
+
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              authState.setTokens(refreshData.access_token, refreshData.refresh_token);
+              onRefreshed(true);
+            } else {
+              authState.clear();
+              onRefreshed(false);
+              if (typeof window !== "undefined") window.location.href = "/login";
+            }
+          } catch (e) {
+            authState.clear();
+            onRefreshed(false);
+            if (typeof window !== "undefined") window.location.href = "/login";
+          } finally {
+            isRefreshing = false;
+          }
+        }
+        
+        // Wait for refresh to complete if it was triggered by this or another request
+        const refreshSuccess = await new Promise<boolean>(resolve => {
+          if (!isRefreshing && authState.accessToken) {
+            resolve(true); // already refreshed by another concurrent request that finished
+          } else if (!isRefreshing && !authState.accessToken) {
+             resolve(false);
+          } else {
+            subscribeToRefresh(resolve);
+          }
+        });
+
+        if (refreshSuccess) {
+          // Retry the request exactly once
+          response = await doFetch();
+        } else {
+          // Refresh failed, proceed to throw 401 below
+          if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+            window.location.href = "/login";
+          }
+        }
+      } else {
+        authState.clear();
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
+      }
+    }
 
     const payload = (await response.json().catch(() => undefined)) as any;
 

@@ -56,7 +56,10 @@ from app.api.endpoints import auth
 from app.api.endpoints import artifacts
 
 # Register routers
+from app.api.endpoints import workspaces
+
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(workspaces.router)
 app.include_router(artifacts.router)
 app.include_router(health_router)
 app.include_router(workers.router)

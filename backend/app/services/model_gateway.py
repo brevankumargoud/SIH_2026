@@ -64,10 +64,12 @@ class ModelGatewayService:
     def process_inference(self, request: InferenceRequest) -> InferenceResponse:
         model, worker = self.select_model_and_worker(request)
         
+        is_ollama = worker.hardware_info.get("type") == "ollama" if worker.hardware_info else False
         client = ModelWorkerClient(
             ip_address=worker.ip_address,
             port=worker.port,
-            protocol=worker.protocol
+            protocol=worker.protocol,
+            is_ollama=is_ollama
         )
         
         messages_payload = []
