@@ -4,6 +4,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.endpoints import workers
+from app.api.endpoints import models
+from app.api.endpoints import conversations
+from app.api.endpoints import knowledge_bases
+from app.api.endpoints import documents
+from app.api.endpoints import agents
+from app.api.endpoints import security
 from app.core.config import settings
 
 # Configure logging
@@ -45,8 +52,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from app.api.endpoints import auth
+from app.api.endpoints import artifacts
+
 # Register routers
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(artifacts.router)
 app.include_router(health_router)
+app.include_router(workers.router)
+app.include_router(models.router)
+app.include_router(conversations.router)
+app.include_router(knowledge_bases.router)
+app.include_router(documents.router)
+app.include_router(agents.router)
+app.include_router(security.router)
 
 
 @app.get("/", tags=["Root"], include_in_schema=False)
