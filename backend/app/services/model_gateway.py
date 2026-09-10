@@ -63,6 +63,7 @@ class ModelGatewayService:
 
     def process_inference(self, request: InferenceRequest) -> InferenceResponse:
         model, worker = self.select_model_and_worker(request)
+        logger.info(f"Selected model='{model.model_identifier}' on worker='{worker.name}' (target={worker.ip_address}:{worker.port})")
         
         is_ollama = worker.hardware_info.get("type") == "ollama" if worker.hardware_info else False
         client = ModelWorkerClient(

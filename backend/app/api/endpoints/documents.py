@@ -1,7 +1,7 @@
 import uuid
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
 from app.db.database import get_db
 from app.models.document import Document
@@ -37,12 +37,13 @@ def upload_document(
 @router.get("/knowledge-bases/{kb_id}/documents", response_model=List[DocumentResponse])
 def list_documents(kb_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     check_kb_access(kb_id, db, current_user)
-    stmt = select(Document).where(Document.knowledge_base_id == kb_id)
+    stmt = select(Document).options(selectinload(Document.chunks)).where(Document.knowledge_base_id == kb_id)
     return list(db.execute(stmt).scalars().all())
 
 @router.get("/documents/{document_id}", response_model=DocumentResponse)
 def get_document(document_id: uuid.UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    doc = db.get(Document, document_id)
+    stmt = select(Document).options(selectinload(Document.chunks)).where(Document.id == document_id)
+    doc = db.execute(stmt).scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     check_kb_access(doc.knowledge_base_id, db, current_user)

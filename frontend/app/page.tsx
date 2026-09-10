@@ -776,6 +776,7 @@ function ChatWorkspace() {
   const [leftOpen, setLeftOpen] = useState(true)
   const [model, setModel] = useState('Sovereign-32B')
   const [agent, setAgent] = useState('Operations Copilot')
+  const [useKnowledge, setUseKnowledge] = useState(true)
   const [attachment, setAttachment] = useState<any>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
 
@@ -822,7 +823,7 @@ function ChatWorkspace() {
     setError('')
 
     try {
-      const result = await chatService.sendMessage(userText, selected || undefined, model)
+      const result = await chatService.sendMessage(userText, selected || undefined, model, useKnowledge)
       setMessages(m => [...m, result.data])
     } catch {
       setError(
@@ -943,6 +944,26 @@ function ChatWorkspace() {
               <option className="bg-[#0c1524]">Report Composer</option>
             </select>
           </div>
+
+          {/* RAG Knowledge Retrieval Toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !useKnowledge
+              setUseKnowledge(next)
+              setNotice(`Knowledge Base Retrieval (RAG): ${next ? 'ENABLED' : 'DISABLED'}`)
+              setTimeout(() => setNotice(''), 2500)
+            }}
+            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[10px] font-mono uppercase tracking-wider transition ${
+              useKnowledge
+                ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300 shadow-[0_0_10px_rgba(0,210,255,0.2)]'
+                : 'border-white/10 bg-[#060b13] text-muted-foreground hover:text-foreground'
+            }`}
+            title="Toggle Knowledge Base / RAG Retrieval"
+          >
+            <Database className="size-3.5 text-cyan-400" />
+            <span>RAG: {useKnowledge ? 'ON' : 'OFF'}</span>
+          </button>
 
           <span className="hidden md:flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 font-mono text-[9px] uppercase tracking-wider text-emerald-400">
             <span className="size-1.5 rounded-full bg-emerald-400" /> Air-Gapped
@@ -1306,6 +1327,27 @@ function ChatWorkspace() {
                       onChange={e => handleFileUpload(e.target.files)}
                     />
                   </label>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !useKnowledge
+                      setUseKnowledge(next)
+                      setNotice(`Knowledge Base Retrieval (RAG): ${next ? 'ENABLED' : 'DISABLED'}`)
+                      setTimeout(() => setNotice(''), 2500)
+                    }}
+                    className={`ml-1 flex items-center gap-1.5 rounded-lg border px-2 py-1 font-mono transition ${
+                      useKnowledge
+                        ? 'border-cyan-500/40 bg-cyan-500/15 text-cyan-300 shadow-[0_0_8px_rgba(0,210,255,0.2)]'
+                        : 'border-white/10 bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-foreground'
+                    }`}
+                    title={useKnowledge ? 'RAG is ENABLED (Queries local knowledge base)' : 'RAG is DISABLED (Direct model generation)'}
+                  >
+                    <BookOpen className="size-3.5 text-cyan-400" />
+                    <span className="text-[10px] uppercase font-bold tracking-wider">
+                      RAG {useKnowledge ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
                 </div>
 
                 <button

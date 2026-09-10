@@ -11,6 +11,7 @@ from app.models.message import Message
 from app.models.model_inference_run import ModelInferenceRun
 from app.models.workspace import Workspace
 from app.models.user import User
+from app.models.knowledge_base import KnowledgeBase
 from app.schemas.chat import ConversationCreate, ChatRequest, ChatResponse, MessageResponse
 from app.schemas.model_gateway import InferenceRequest, MessagePayload
 from app.services.model_gateway import ModelGatewayService
@@ -75,35 +76,53 @@ class ChatService:
         
         # 3. Handle Knowledge Retrieval
         retrieved_sources = []
-        if request.use_knowledge and request.knowledge_base_ids:
-            retrieval_svc = RetrievalService(self.db)
-            all_results = []
-            for kb_id in request.knowledge_base_ids:
-                results = retrieval_svc.search(kb_id, request.content, top_k=3, threshold=0.3)
-                all_results.extend(results)
-            
-            # Sort overall results by score descending and take top 5
-            all_results.sort(key=lambda x: x.score, reverse=True)
-            top_results = all_results[:5]
-            
-            if top_results:
-                context_str = "\n\n".join([f"[Document: {r.filename}, page {r.page_number}]\n{r.content}" for r in top_results])
+        if request.use_knowledge:
+            target_kb_ids = list(request.knowledge_base_ids)
+            if not target_kb_ids and conv.workspace_id:
+                target_kb_ids = list(self.db.execute(
+                    select(KnowledgeBase.id).where(KnowledgeBase.workspace_id == conv.workspace_id)
+                ).scalars().all())
+
+            logger.info(f"RAG enabled: querying {len(target_kb_ids)} knowledge base(s) for prompt length={len(request.content)}")
+
+            if target_kb_ids:
+                retrieval_svc = RetrievalService(self.db)
+                all_results = []
+                for kb_id in target_kb_ids:
+                    results = retrieval_svc.search(kb_id, request.content, top_k=3, threshold=0.3)
+                    all_results.extend(results)
                 
-                # Append retrieved context to the system message or create one
-                sys_msg = MessagePayload(role="system", content=f"You are a helpful assistant. Use the following retrieved knowledge to answer the user's question. Do not ignore your instructions.\n\nRetrieved knowledge:\n{context_str}")
-                messages_payload = [sys_msg]
+                # Sort overall results by score descending and take top 5
+                all_results.sort(key=lambda x: x.score, reverse=True)
+                top_results = all_results[:5]
+
+                logger.info(f"RAG retrieval completed: found {len(top_results)} relevant chunk(s)")
                 
-                for r in top_results:
-                    retrieved_sources.append({
-                        "document_id": str(r.document_id),
-                        "filename": r.filename,
-                        "chunk_id": str(r.chunk_id),
-                        "page_number": r.page_number,
-                        "score": r.score
-                    })
+                if top_results:
+                    context_str = "\n\n".join([f"[Document: {r.filename}, page {r.page_number}]\n{r.content}" for r in top_results])
+                    
+                    # Append retrieved context to the system message or create one
+                    sys_msg = MessagePayload(
+                        role="system",
+                        content=f"You are a helpful assistant. Use the following retrieved knowledge to answer the user's question. Do not ignore your instructions.\n\nRetrieved knowledge:\n{context_str}"
+                    )
+                    messages_payload = [sys_msg]
+                    
+                    for r in top_results:
+                        retrieved_sources.append({
+                            "document_id": str(r.document_id),
+                            "filename": r.filename,
+                            "chunk_id": str(r.chunk_id),
+                            "page_number": r.page_number,
+                            "score": r.score
+                        })
+                else:
+                    messages_payload = []
             else:
+                logger.info("RAG enabled but no knowledge bases found for workspace")
                 messages_payload = []
         else:
+            logger.info("RAG disabled: skipping knowledge retrieval")
             messages_payload = []
 
         # Add history to messages_payload
@@ -121,6 +140,7 @@ class ChatService:
         )
 
         gateway = ModelGatewayService(self.db)
+        logger.info(f"Routing inference to ModelGateway (preferred_model={request.preferred_model})")
         
         start_time = time.time()
         try:

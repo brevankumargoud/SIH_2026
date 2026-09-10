@@ -444,7 +444,9 @@ export const chatService = {
   async sendMessage(
     content: string,
     conversationId?: string,
-    modelOverride?: string
+    modelOverride?: string,
+    useKnowledge: boolean = false,
+    knowledgeBaseIds?: string[]
   ): Promise<ApiResponse<ChatResponse>> {
     const convId = conversationId || activeConversationId;
 
@@ -463,11 +465,25 @@ export const chatService = {
         activeConv = convRes.data.id;
       }
       
+      let targetKbIds = knowledgeBaseIds;
+      if (useKnowledge && (!targetKbIds || targetKbIds.length === 0)) {
+        try {
+          const kbRes = await apiClient.get<any>("/knowledge-bases/default");
+          if (kbRes?.data?.id) {
+            targetKbIds = [kbRes.data.id];
+          }
+        } catch {
+          // let backend resolve workspace default
+        }
+      }
+
       const response = await apiClient.post<any>(
         `/conversations/${activeConv}/messages`,
         {
           content: content,
           preferred_model: modelOverride || undefined,
+          use_knowledge: useKnowledge,
+          knowledge_base_ids: targetKbIds || [],
         },
         { timeoutMs: 120000 }
       );
@@ -479,8 +495,10 @@ export const chatService = {
 
       const sources = Array.isArray(payload?.sources)
         ? payload.sources.map((s: any) => ({
-            name: s.metadata?.filename || s.metadata?.source || s.document_id || "Indexed Document",
-            location: s.metadata?.page
+            name: s.filename || s.metadata?.filename || s.metadata?.source || s.document_id || "Indexed Document",
+            location: s.page_number
+              ? `Page ${s.page_number}`
+              : s.metadata?.page
               ? `Page ${s.metadata.page}`
               : s.chunk_id
               ? `Chunk ${s.chunk_id.slice(0, 8)}`
@@ -559,6 +577,32 @@ export const documentService = {
       const response = await apiClient.get<any>(`/knowledge-bases/${kbId}/documents`);
       const docsList = response.data?.documents || response.data || [];
 
+      if (!apiClient.isMockMode()) {
+        const backendDocs: DocumentRecord[] = Array.isArray(docsList) ? docsList.map((d: any) => {
+          let status: DocumentRecord["status"] = "Indexed";
+          if (d.processing_status === "FAILED") status = "Failed";
+          else if (d.processing_status === "PENDING" || d.processing_status === "PROCESSING") status = "Processing";
+
+          const ext = d.filename?.split(".").pop()?.toUpperCase() || d.file_type?.toUpperCase() || "DOC";
+
+          return {
+            id: d.id,
+            name: d.filename,
+            type: ext,
+            size: `1.0 MB`, // file size not returned by backend currently
+            owner: "Authenticated User",
+            department: "Operations",
+            uploaded: d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent",
+            status: status,
+            knowledgeBase: "Primary KB",
+            chunks: typeof d.chunks === "number" ? d.chunks : 0,
+            classification: "Internal",
+          };
+        }) : [];
+
+        return { data: backendDocs };
+      }
+
       if (Array.isArray(docsList) && docsList.length > 0) {
         const backendDocs: DocumentRecord[] = docsList.map((d: any) => {
           let status: DocumentRecord["status"] = "Indexed";
@@ -577,7 +621,7 @@ export const documentService = {
             uploaded: d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent",
             status: status,
             knowledgeBase: "Primary KB",
-            chunks: 0,
+            chunks: typeof d.chunks === "number" ? d.chunks : 0,
             classification: "Internal",
           };
         });
@@ -613,7 +657,7 @@ export const documentService = {
             uploaded: d.created_at ? new Date(d.created_at).toLocaleDateString() : "Recent",
             status: status,
             knowledgeBase: "Primary KB",
-            chunks: 0,
+            chunks: typeof d.chunks === "number" ? d.chunks : 0,
             classification: "Internal",
           },
         };
@@ -648,11 +692,13 @@ export const documentService = {
           uploaded: "Just now",
           status: meta?.processing_status === "PENDING" || meta?.processing_status === "PROCESSING" ? "Processing" : meta?.processing_status === "FAILED" ? "Failed" : "Indexed",
           knowledgeBase: "Primary KB",
-          chunks: 0,
+          chunks: typeof meta?.chunks === "number" ? meta.chunks : 0,
           classification: "Internal",
         };
 
-        localDocsCache.unshift(newDoc);
+        if (apiClient.isMockMode()) {
+          localDocsCache.unshift(newDoc);
+        }
         return { data: newDoc, message: "Document uploaded and indexed into local vector store" };
       } catch (err) {
         if (!apiClient.isMockMode()) throw err;

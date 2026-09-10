@@ -8,7 +8,7 @@ base_url = "http://localhost:8001"
 # 1. Login with dev user
 login_res = requests.post(
     f"{base_url}/auth/login",
-    data={"username": "testadmin_55957368", "password": "dev_password_only"}
+    data={"username": "dev_user", "password": "dev_password_only"}
 )
 if login_res.status_code != 200:
     print(f"Login failed: {login_res.text}")

@@ -1,5 +1,5 @@
 import uuid
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import List, Optional, Any
 from datetime import datetime
 
@@ -24,8 +24,16 @@ class DocumentResponse(BaseModel):
     filename: str
     file_type: str
     processing_status: str
+    chunks: int = 0
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("chunks", mode="before")
+    @classmethod
+    def count_chunks(cls, v: Any) -> int:
+        if isinstance(v, (list, tuple, set)):
+            return len(v)
+        return int(v) if v is not None else 0
 
 class SearchResult(BaseModel):
     chunk_id: uuid.UUID
