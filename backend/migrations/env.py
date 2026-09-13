@@ -12,6 +12,7 @@ if str(BASE_DIR) not in sys.path:
 
 from app.core.config import settings
 from app.db.database import Base
+import app.models
 
 # Alembic Config object
 config = context.config

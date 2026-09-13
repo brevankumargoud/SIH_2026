@@ -1,0 +1,2 @@
+import { apiClient } from "../api-client"; import { settingsService as mock } from "../services"; import type { SettingsState } from "../services"; import type { ApiEnvelope, SettingsPatch } from "../api-types";
+export const settingsApi = { get: async (): Promise<ApiEnvelope<SettingsState>> => apiClient.isMockMode() ? mock.get() : apiClient.get("/settings"), update: async (input: SettingsPatch): Promise<ApiEnvelope<SettingsState>> => apiClient.isMockMode() ? mock.update(input) : apiClient.put<SettingsState>("/settings", input) }; export default settingsApi;

@@ -1,0 +1,2 @@
+import { apiClient } from "../api-client"; import { auditService as mock } from "../services"; import type { AuditEvent } from "../services"; import type { ApiEnvelope, AuditQuery, ExportRequest } from "../api-types";
+export const auditApi = { list: async (query?: AuditQuery): Promise<ApiEnvelope<AuditEvent[]>> => apiClient.isMockMode() ? mock.list(query) : apiClient.get("/audit"), export: async (input: ExportRequest) => apiClient.isMockMode() ? mock.export() : apiClient.post<null>("/audit/export", input) }; export default auditApi;
