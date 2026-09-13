@@ -55,10 +55,17 @@ Start with:
 * [`docs/security/`](docs/security/) — Security architecture
 * [`docs/demo/`](docs/demo/) — Prototype and demonstration flow
 
-## 👥 Team
+## Team Lead
+> Revan Kumar Goud Bommagoni
 
-**SIH26117 Team**
-Smart India Hackathon 2026
+## 👥 Team Members
+
+**Team VibeZ**
+- Vaddi Ranga Vikas
+- Busireddy Navya
+- Ch. Pavana Prasanna Lakshmi
+- Jayadam Sadhvi
+- B. Hema Sree
 
 ---
 
